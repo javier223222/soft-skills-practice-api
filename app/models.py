@@ -107,7 +107,7 @@ class FeedbackPractice(SQLModel, table=True):
     confidence_feedback: Optional[str] = Field(default=None, max_length=500)
     
     # Improvement areas (tags)
-    improvement_areas: List[str] = Field(default_factory=list, sa_column_kwargs={"type_": "JSON"})
+    improvement_areas: Optional[str] = Field(default="[]", description="JSON array of improvement areas")
     
     # LLM metadata
     llm_model_used: str = Field(max_length=100)
@@ -160,7 +160,7 @@ class TrackingLog(SQLModel, table=True):
     user_id: str = Field(max_length=100)
     practice_session_id: Optional[str] = Field(default=None)
     event_type: str = Field(max_length=50)  # "practice_started", "practice_completed", etc.
-    event_data: dict = Field(default_factory=dict, sa_column_kwargs={"type_": "JSON"})
+    event_data: Optional[str] = Field(default="{}", description="JSON string for event data")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     
     # For analytics and auditing
