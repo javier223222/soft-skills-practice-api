@@ -2,6 +2,12 @@
 Script to populate the database with initial data matching the UI screens
 """
 
+import sys
+import os
+
+# Add the parent directory to the path so we can import from app
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from sqlmodel import Session, create_engine
 from app.models import SoftSkill, SoftSkillScenario, SoftSkillCategory
 from app.config import settings
