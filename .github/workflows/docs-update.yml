@@ -1,0 +1,184 @@
+name: 📚 Update Documentation
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'app/**'
+      - 'README.md'
+      - 'docs/**'
+
+jobs:
+  update-api-docs:
+    name: 📖 Generate API Documentation
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: 📚 Generate OpenAPI spec
+      run: |
+        mkdir -p docs/api
+        python -c "
+        import json
+        from app.main import app
+        
+        # Generate OpenAPI spec
+        openapi_spec = app.openapi()
+        
+        # Save to file
+        with open('docs/api/openapi.json', 'w') as f:
+            json.dump(openapi_spec, f, indent=2)
+        
+        print('OpenAPI specification generated successfully')
+        "
+
+    - name: 📝 Generate API documentation
+      run: |
+        # Create API documentation from OpenAPI spec
+        cat > docs/api/README.md << 'EOF'
+        # API Documentation
+        
+        This directory contains the automatically generated API documentation for the Soft Skills Practice Service.
+        
+        ## Files
+        
+        - `openapi.json` - OpenAPI 3.0 specification
+        - Interactive documentation available at `/docs` when running the service
+        
+        ## Endpoints Overview
+        
+        ### Soft Skills Management
+        - `GET /soft-skills/` - List all soft skills
+        - `GET /soft-skills/{id}` - Get specific soft skill
+        - `GET /soft-skills/{id}/scenarios` - Get scenarios for a skill
+        
+        ### Practice Sessions
+        - `POST /practice/start` - Start a practice session
+        - `POST /practice/submit` - Submit completed practice
+        
+        ### Progress Tracking
+        - `GET /progress/{user_id}` - Get user progress
+        - `GET /progress/{user_id}/soft-skills/{skill_id}` - Get skill-specific progress
+        
+        ### Health Monitoring
+        - `GET /health/` - Service health check
+        
+        ## Authentication
+        
+        Currently, the API does not require authentication for basic operations. This may change in future versions.
+        
+        ## Rate Limiting
+        
+        No rate limiting is currently implemented. Consider implementing rate limiting for production use.
+        
+        ## Error Handling
+        
+        The API returns standard HTTP status codes:
+        - `200` - Success
+        - `400` - Bad Request
+        - `404` - Not Found
+        - `500` - Internal Server Error
+        
+        Error responses include a JSON object with `error` and `message` fields.
+        EOF
+
+    - name: 📊 Generate metrics documentation
+      run: |
+        mkdir -p docs/metrics
+        cat > docs/metrics/README.md << 'EOF'
+        # Metrics and Scoring
+        
+        ## Evaluation Dimensions
+        
+        Each practice session is evaluated across 5 key dimensions:
+        
+        ### 1. Clarity (1-5)
+        Measures how clear and well-structured the response is.
+        - **5**: Crystal clear, well-organized thoughts
+        - **4**: Clear with minor areas for improvement
+        - **3**: Generally clear but could be more structured
+        - **2**: Somewhat unclear, needs better organization
+        - **1**: Confusing or poorly structured
+        
+        ### 2. Empathy (1-5)
+        Evaluates the level of understanding and consideration for others.
+        - **5**: Demonstrates deep empathy and understanding
+        - **4**: Shows good empathy with room for growth
+        - **3**: Basic empathy demonstrated
+        - **2**: Limited empathy shown
+        - **1**: Lacks empathy or understanding
+        
+        ### 3. Assertiveness (1-5)
+        Assesses the confidence and directness of communication.
+        - **5**: Perfectly balanced assertiveness
+        - **4**: Good assertiveness with minor adjustments needed
+        - **3**: Moderately assertive
+        - **2**: Could be more assertive
+        - **1**: Lacks assertiveness
+        
+        ### 4. Listening (1-5)
+        Measures active listening and responsiveness to the scenario.
+        - **5**: Excellent active listening demonstrated
+        - **4**: Good listening skills shown
+        - **3**: Basic listening evident
+        - **2**: Limited listening demonstrated
+        - **1**: Poor listening skills
+        
+        ### 5. Confidence (1-5)
+        Evaluates the confidence level demonstrated in the response.
+        - **5**: High confidence and self-assurance
+        - **4**: Good confidence level
+        - **3**: Moderate confidence
+        - **2**: Could be more confident
+        - **1**: Lacks confidence
+        
+        ## Overall Score Calculation
+        
+        The overall score is calculated as the average of all five dimensions:
+        ```
+        Overall Score = (Clarity + Empathy + Assertiveness + Listening + Confidence) / 5
+        ```
+        
+        ## Points System
+        
+        Points are awarded based on the overall score:
+        ```
+        Points = Base Points (10) × (Overall Score / 3.0)
+        ```
+        
+        This encourages improvement while providing rewards for participation.
+        
+        ## Progress Calculation
+        
+        Progress percentage is calculated based on completed practices:
+        ```
+        Progress % = (Completed Practices / 10) × 100
+        ```
+        
+        The system assumes 10 completed practices represent mastery of a skill.
+        EOF
+
+    - name: 📋 Commit and push changes
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        if git diff --quiet; then
+          echo "No documentation changes to commit"
+        else
+          git add docs/
+          git commit -m "📚 Auto-update API documentation [skip ci]"
+          git push
+        fi

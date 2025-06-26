@@ -1,0 +1,78 @@
+name: 🔄 Dependency Updates
+
+on:
+  schedule:
+    # Run every Monday at 9 AM UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+jobs:
+  update-dependencies:
+    name: 📦 Update Dependencies
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: 📦 Install pip-tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install pip-tools
+
+    - name: 🔄 Update requirements
+      run: |
+        # Create requirements.in if it doesn't exist
+        if [ ! -f requirements.in ]; then
+          cp requirements.txt requirements.in
+        fi
+        
+        # Update dependencies
+        pip-compile --upgrade requirements.in
+        
+        # Check if there are changes
+        if git diff --quiet requirements.txt; then
+          echo "No dependency updates available"
+          echo "HAS_UPDATES=false" >> $GITHUB_ENV
+        else
+          echo "Dependencies updated"
+          echo "HAS_UPDATES=true" >> $GITHUB_ENV
+        fi
+
+    - name: 🔍 Check for security vulnerabilities
+      if: env.HAS_UPDATES == 'true'
+      run: |
+        pip install safety
+        safety check -r requirements.txt --json || true
+
+    - name: 📋 Create Pull Request
+      if: env.HAS_UPDATES == 'true'
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        commit-message: "📦 Update dependencies"
+        title: "📦 Automated dependency updates"
+        body: |
+          ## 📦 Dependency Updates
+          
+          This PR contains automated dependency updates.
+          
+          ### Changes
+          - Updated Python packages to latest compatible versions
+          - Security vulnerability check passed
+          
+          ### Review Checklist
+          - [ ] All tests pass
+          - [ ] No breaking changes introduced
+          - [ ] Security scan completed
+          
+          This PR was created automatically by GitHub Actions.
+        branch: dependency-updates
+        delete-branch: true

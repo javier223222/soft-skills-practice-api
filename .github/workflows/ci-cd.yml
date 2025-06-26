@@ -1,0 +1,285 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  PYTHON_VERSION: '3.11'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Job 1: Code Quality and Testing
+  test:
+    name: 🧪 Tests & Code Quality
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: soft_skill_practice_test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest-cov black flake8 isort mypy
+
+    - name: 🔍 Code formatting check (Black)
+      run: black --check --diff app/ tests/
+
+    - name: 🔍 Import sorting check (isort)
+      run: isort --check-only --diff app/ tests/
+
+    - name: 🔍 Linting (flake8)
+      run: flake8 app/ tests/ --max-line-length=88 --extend-ignore=E203,W503
+
+    - name: 🔍 Type checking (mypy)
+      run: mypy app/ --ignore-missing-imports
+      continue-on-error: true  # MyPy can be strict, allow continuation
+
+    - name: 🧪 Run tests with coverage
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/soft_skill_practice_test_db
+        FEEDBACK_LLM_SERVICE_URL: http://localhost:8001
+      run: |
+        pytest tests/ -v --cov=app --cov-report=xml --cov-report=html
+        
+    - name: 📊 Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+  # Job 2: Security Scanning
+  security:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install safety bandit
+
+    - name: 🔍 Check for security vulnerabilities (Safety)
+      run: safety check --json
+      continue-on-error: true
+
+    - name: 🔍 Security linting (Bandit)
+      run: bandit -r app/ -f json
+      continue-on-error: true
+
+  # Job 3: Build Docker Image
+  build:
+    name: 🏗️ Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    if: github.event_name == 'push'
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🏗️ Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: 🔐 Log in to Container Registry
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 📝 Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: 🏗️ Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  # Job 4: Integration Tests
+  integration-test:
+    name: 🔗 Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push'
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🚀 Start services with Docker Compose
+      run: |
+        cp .env.example .env
+        docker-compose up -d --build
+        
+    - name: ⏳ Wait for services to be ready
+      run: |
+        timeout 60 bash -c 'until docker-compose exec -T postgres pg_isready -U postgres; do sleep 2; done'
+        sleep 10  # Additional wait for API to be fully ready
+
+    - name: 📚 Populate test data
+      run: |
+        docker-compose exec -T api python scripts/populate_data.py
+
+    - name: 🧪 Run API integration tests
+      run: |
+        # Test health endpoint
+        curl -f http://localhost:8000/health/ || exit 1
+        
+        # Test soft skills endpoint
+        curl -f http://localhost:8000/soft-skills/ || exit 1
+        
+        # Test scenarios endpoint  
+        SKILL_ID=$(curl -s http://localhost:8000/soft-skills/ | jq -r '.[0].id')
+        curl -f "http://localhost:8000/soft-skills/$SKILL_ID/scenarios" || exit 1
+
+    - name: 🔽 Stop services
+      if: always()
+      run: docker-compose down -v
+
+  # Job 5: Deploy to Staging (if main branch)
+  deploy-staging:
+    name: 🚀 Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [integration-test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: staging
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🚀 Deploy to staging
+      run: |
+        echo "🚀 Deploying to staging environment..."
+        # Add your deployment scripts here
+        # Example: kubectl apply -f k8s/staging/
+        # Example: docker-compose -f docker-compose.staging.yml up -d
+        echo "✅ Deployment to staging completed"
+
+  # Job 6: Deploy to Production (if tagged)
+  deploy-production:
+    name: 🌟 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [integration-test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: production
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🌟 Deploy to production
+      run: |
+        echo "🌟 Deploying to production environment..."
+        # Add your production deployment scripts here
+        # Example: kubectl apply -f k8s/production/
+        echo "✅ Deployment to production completed"
+
+  # Job 7: Release Notes (if tagged)
+  release:
+    name: 📋 Create Release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [deploy-production]
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: 📋 Generate changelog
+      id: changelog
+      run: |
+        # Simple changelog generation
+        PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+        if [ -n "$PREVIOUS_TAG" ]; then
+          CHANGES=$(git log --pretty=format:"- %s" $PREVIOUS_TAG..HEAD)
+        else
+          CHANGES=$(git log --pretty=format:"- %s")
+        fi
+        echo "changes<<EOF" >> $GITHUB_OUTPUT
+        echo "$CHANGES" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: 🎉 Create Release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name }}
+        release_name: Release ${{ github.ref_name }}
+        body: |
+          ## 🚀 What's New in ${{ github.ref_name }}
+          
+          ${{ steps.changelog.outputs.changes }}
+          
+          ## 📦 Docker Image
+          
+          ```bash
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          ```
+          
+          ## 🔗 Quick Start
+          
+          ```bash
+          git clone https://github.com/${{ github.repository }}.git
+          cd soft-skills-practice-api
+          docker-compose up -d
+          ```
+          
+          For more details, see the [README](README.md).
+        draft: false
+        prerelease: false

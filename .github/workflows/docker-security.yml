@@ -1,0 +1,45 @@
+name: 🐳 Docker Image Scan
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run security scan daily at 2 AM UTC
+    - cron: '0 2 * * *'
+
+jobs:
+  docker-security-scan:
+    name: 🔒 Docker Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🏗️ Build Docker image
+      run: |
+        docker build -t soft-skills-api:scan .
+
+    - name: 🔍 Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'soft-skills-api:scan'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: 📊 Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: 🔍 Run Trivy vulnerability scanner (table format)
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'soft-skills-api:scan'
+        format: 'table'
+        exit-code: '1'  # Fail the action if vulnerabilities are found
+        ignore-unfixed: true
+        severity: 'CRITICAL,HIGH'
